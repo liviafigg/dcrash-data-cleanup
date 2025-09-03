@@ -9,7 +9,7 @@ banco_config = {
     'port': 5432,
     'dbname': 'PUC_TECH_DASHBOARD',
     'user': 'postgres',
-    'password': 'twitter#2025'
+    'password': 'chiko'
 }
 
 table_name = 'Acidentes'
@@ -77,32 +77,47 @@ def limpar_preparar(df):
 
     return df
 
-
 def inserir_batch(df, table, cfg):
+    if df.empty:
+        print("[ERRO] Nenhum dado para inserir.")
+        return
+
     conn = psycopg2.connect(**cfg)
     cur = conn.cursor()
 
     cols = ['ID'] + list(cols_mapping.values()) + ['data', 'fatalidades']
     placeholders = ','.join(['%s'] * len(cols))
-
-    sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
-
+    sql = f'INSERT INTO "{table}" ({", ".join(cols)}) VALUES ({placeholders})'
+    
     records = []
     for _, row in df.iterrows():
         try:
             rec = [
-                str(uuid.UUID(row['_id']))  # usa o _id do CSV
+                str(uuid.uuid4()) # usa o _id do CSV
             ] + [row[k] for k in cols_mapping.keys()] + [
                 row['data'], row['fatalidades']
             ]
             records.append(rec)
-        except Exception:
-            continue  # pula linhas com ID inválido
+        except Exception as e:
+            print(f"[AVISO] Linha ignorada por erro: {e}")
+            continue
 
-    cur.executemany(sql, records)
-    conn.commit()
-    cur.close()
-    conn.close()
+    if not records:
+        print("[ERRO] Nenhum registro válido foi montado para inserção.")
+        return
+
+    print(f"[INFO] Inserindo {len(records)} registros na tabela '{table}'...")
+
+    try:
+        cur.executemany(sql, records)
+        conn.commit()
+        print("[SUCESSO] Dados inseridos com sucesso!")
+    except Exception as e:
+        print(f"[ERRO] Falha na inserção: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
 
 
 def main():
