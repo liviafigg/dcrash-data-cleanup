@@ -19,7 +19,7 @@ cols_mapping = {
     'RODOVIA': 'rodovia',
     'MARCO_QM': 'km',
     'SENTIDO': 'sentido',
-    'CLASS_ACID': 'classificacao_acidente',
+    'CLASS_ACID': 'classificação_acidente',
     'TIPO_ACID': 'Tipo_acidente',
     'CAUSA': 'causa',
     'METEORO': 'meteoro',
@@ -77,7 +77,7 @@ def inserir_batch(df, table, cfg):
     conn = psycopg2.connect(**cfg)
     cur = conn.cursor()
 
-    cols = ['id'] + list(cols_mapping.values()) + ['data', 'fatalidades']
+    cols = ['ID'] + list(cols_mapping.values()) + ['data', 'fatalidades']
     placeholders = ','.join(['%s'] * len(cols))
 
     sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
