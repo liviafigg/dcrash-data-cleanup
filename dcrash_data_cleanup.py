@@ -2,6 +2,7 @@ import pandas as pd
 import psycopg2
 import uuid
 import os
+import re
 
 # Configuração do banco PostgreSQL
 banco_config = {
@@ -43,39 +44,45 @@ def carregar_csv(local_path="acidentes_2025.csv"):
         return None
 
 
-
 def limpar_preparar(df):
-    # Combinar data + hora
-    df.loc[:, 'data'] = pd.to_datetime(df['DATA'] + ' ' + df['HR_ACID'], errors='coerce')
+    # Combina data + hora
+    df['data'] = pd.to_datetime(df['DATA'] + ' ' + df['HR_ACID'], errors='coerce')
 
-    # Filtrar apenas anos desejados
+    # Filtra apenas anos desejados
     anos_desejados = [2024, 2025]
     df = df[df['data'].dt.year.isin(anos_desejados)].copy()
 
-    # Converter MARCO_QM para número (com separador decimal tratado) e armazenar em 'km'
-    df['km'] = pd.to_numeric(df['MARCO_QM'].astype(str).str.replace(',', '.', regex=False), errors='coerce')
+    # Converte MARCO_QM para número e depois para inteiro (remove casas decimais)
+    df['km'] = pd.to_numeric(
+        df['MARCO_QM'].astype(str).str.replace(',', '.', regex=False),
+        errors='coerce'
+    ).fillna(0).astype(int)
 
     # Conversões seguras
     df['fatalidades'] = pd.to_numeric(df['QTD_VIT_FATAL'], errors='coerce').fillna(0).astype(int)
     df['latitude'] = pd.to_numeric(df['LATITUDE'], errors='coerce')
     df['longitude'] = pd.to_numeric(df['LONGITUDE'], errors='coerce')
 
-    # Lista de colunas para verificar e remover valores inválidos
-    texto_colunas = [
-        'NOME_CONC', 'RODOVIA', 'SENTIDO', 'CLASS_ACID',
-        'TIPO_ACID', 'CAUSA', 'METEORO', 'VISIB', 'VEIC', 'TIPO_PISTA'
-    ]
+    # Regex para detectar valores inválidos
+    regex_invalido = re.compile(
+        r'SEM\s+INFO(?:RMAÇÃO)?|NULO|NÃO\s+INFORMADO|^0$|NULL|SEM\s+INFO/NULO/0',
+        flags=re.IGNORECASE
+    )
 
-    valores_invalidos = ['SEM INFO', 'NULO', '0', 0]
+    # Aplica limpeza nas colunas de texto
+    for csv_col in cols_mapping.keys():
+        if csv_col in df.columns:
+            df[csv_col] = df[csv_col].astype(str).str.strip()
+            df = df[~df[csv_col].str.contains(regex_invalido, na=True)].copy()
 
-    for col in texto_colunas:
-        df = df[~df[col].astype(str).str.upper().isin(valores_invalidos)].copy()
-
-    # Remover linhas com dados essenciais ausentes
+    # Remove registros com dados essenciais ausentes
     campos_essenciais = list(cols_mapping.keys()) + ['data', 'km', 'fatalidades', 'latitude', 'longitude']
     df = df.dropna(subset=campos_essenciais)
 
+    print(f"[INFO] Registros após limpeza: {len(df)}")
     return df
+
+
 
 def inserir_batch(df, table, cfg):
     if df.empty:
@@ -87,8 +94,9 @@ def inserir_batch(df, table, cfg):
 
     cols = ['ID'] + list(cols_mapping.values()) + ['data', 'fatalidades']
     placeholders = ','.join(['%s'] * len(cols))
-    sql = f'INSERT INTO "{table}" ({", ".join(cols)}) VALUES ({placeholders})'
-    
+    col_names = ', '.join([f'"{col}"' for col in cols])
+    sql = f'INSERT INTO "{table}" ({col_names}) VALUES ({placeholders})'
+
     records = []
     for _, row in df.iterrows():
         try:
