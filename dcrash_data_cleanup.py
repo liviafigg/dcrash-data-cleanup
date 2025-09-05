@@ -3,6 +3,7 @@ import psycopg2
 import uuid
 import os
 import re
+import glob  #Para buscar arquivos por padrão
 
 #Configuração do banco PostgreSQL
 banco_config = {
@@ -32,7 +33,7 @@ cols_mapping = {
     'LONGITUDE': 'longitude'
 }
 
-def carregar_csv(local_path="acidentes_2025.csv"):
+def carregar_csv(local_path):
     if not os.path.exists(local_path):
         print(f"[ERRO] Arquivo '{local_path}' não encontrado.")
         return None
@@ -40,7 +41,7 @@ def carregar_csv(local_path="acidentes_2025.csv"):
     try:
         return pd.read_csv(local_path, sep=",", low_memory=False, on_bad_lines="skip")
     except Exception as e:
-        print(f"[ERRO] Falha ao ler CSV: {e}")
+        print(f"[ERRO] Falha ao ler CSV {local_path}: {e}")
         return None
 
 
@@ -48,11 +49,7 @@ def limpar_preparar(df):
     #Combina data + hora
     df['data'] = pd.to_datetime(df['DATA'] + ' ' + df['HR_ACID'], errors='coerce')
 
-    #Filtra apenas anos desejados(mude caso necessário)
-    anos_desejados = [2021, 2022, 2023, 2024, 2025]
-    df = df[df['data'].dt.year.isin(anos_desejados)].copy()
-
-    #Limpeza de dados da coluna MARCO_QM, mantendo casas decimais
+    #Limpeza da coluna km
     df['km'] = pd.to_numeric(
         df['MARCO_QM'].astype(str).str.replace(',', '.', regex=False),
         errors='coerce'
@@ -63,7 +60,7 @@ def limpar_preparar(df):
     df['latitude'] = pd.to_numeric(df['LATITUDE'], errors='coerce')
     df['longitude'] = pd.to_numeric(df['LONGITUDE'], errors='coerce')
 
-    #Regex para detectar valores inválidos
+    #Regex para valores inválidos
     regex_invalido = re.compile(
         r'SEM\s+INFO(?:RMAÇÃO)?|NULO|NÃO\s+INFORMADO|^0$|NULL|SEM\s+INFO/NULO/0',
         flags=re.IGNORECASE
@@ -101,7 +98,7 @@ def inserir_batch(df, table, cfg):
     for _, row in df.iterrows():
         try:
             rec = [
-                str(uuid.uuid4()) # usa o _id do CSV
+                str(uuid.uuid4())  # gera um ID único
             ] + [row[k] for k in cols_mapping.keys()] + [
                 row['data'], row['fatalidades']
             ]
@@ -129,13 +126,34 @@ def inserir_batch(df, table, cfg):
 
 
 def main():
-    df = carregar_csv("acidentes_2025.csv")
-    if df is None or df.empty:
-        print("[ERRO] CSV não carregado ou vazio.")
+    #Busca todos os arquivos que começam com acidentes_ e terminam em .csv
+    arquivos = glob.glob("acidentes_*.csv")
+
+    if not arquivos:
+        print("[ERRO] Nenhum arquivo CSV encontrado com padrão 'acidentes_*.csv'.")
         return
 
-    print(f"[INFO] Linhas carregadas: {len(df)}")
+    dfs = []
+    for arquivo in arquivos:
+        df = carregar_csv(arquivo)
+        if df is not None and not df.empty:
+            #tenta extrair ano do nome do arquivo, opcional
+            ano = re.findall(r'(\d{4})', arquivo)
+            if ano:
+                df["ano_origem"] = int(ano[0])
+            dfs.append(df)
+        else:
+            print(f"[AVISO] Arquivo {arquivo} não carregado ou vazio.")
 
+    if not dfs:
+        print("[ERRO] Nenhum CSV válido encontrado.")
+        return
+
+    #Junta tudo
+    df = pd.concat(dfs, ignore_index=True)
+    print(f"[INFO] Total de linhas carregadas (todos arquivos): {len(df)}")
+
+    #Limpeza e preparação (agora aceita qualquer ano)
     df_clean = limpar_preparar(df)
     if df_clean is None or df_clean.empty:
         print("[ERRO] DataFrame limpo está vazio ou inválido.")
@@ -143,6 +161,7 @@ def main():
 
     print(f"[INFO] Linhas após limpeza: {len(df_clean)}")
 
+    #Insere no banco
     inserir_batch(df_clean, table_name, banco_config)
 
 
