@@ -98,7 +98,7 @@ def inserir_batch(df, table, cfg):
     for _, row in df.iterrows():
         try:
             rec = [
-                str(uuid.uuid4())  # gera um ID único
+                str(uuid.uuid4())  #Gera um ID único
             ] + [row[k] for k in cols_mapping.keys()] + [
                 row['data'], row['fatalidades']
             ]
@@ -137,7 +137,7 @@ def main():
     for arquivo in arquivos:
         df = carregar_csv(arquivo)
         if df is not None and not df.empty:
-            #tenta extrair ano do nome do arquivo, opcional
+            #Tenta extrair ano do nome do arquivo
             ano = re.findall(r'(\d{4})', arquivo)
             if ano:
                 df["ano_origem"] = int(ano[0])
@@ -153,7 +153,7 @@ def main():
     df = pd.concat(dfs, ignore_index=True)
     print(f"[INFO] Total de linhas carregadas (todos arquivos): {len(df)}")
 
-    #Limpeza e preparação (agora aceita qualquer ano)
+    #Limpeza e preparação
     df_clean = limpar_preparar(df)
     if df_clean is None or df_clean.empty:
         print("[ERRO] DataFrame limpo está vazio ou inválido.")
