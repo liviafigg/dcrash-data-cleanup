@@ -4,7 +4,7 @@ import uuid
 import os
 import re
 
-# Configuração do banco PostgreSQL
+#Configuração do banco PostgreSQL
 banco_config = {
     'host': 'localhost',
     'port': 5432,
@@ -15,7 +15,7 @@ banco_config = {
 
 table_name = 'Acidentes'
 
-# Mapeamento entre CSV e colunas do PostgreSQL
+#Mapeamento entre CSV e colunas do PostgreSQL
 cols_mapping = {
     'NOME_CONC': 'concessionaria',
     'RODOVIA': 'rodovia',
@@ -45,37 +45,37 @@ def carregar_csv(local_path="acidentes_2025.csv"):
 
 
 def limpar_preparar(df):
-    # Combina data + hora
+    #Combina data + hora
     df['data'] = pd.to_datetime(df['DATA'] + ' ' + df['HR_ACID'], errors='coerce')
 
-    # Filtra apenas anos desejados
-    anos_desejados = [2024, 2025]
+    #Filtra apenas anos desejados(mude caso necessário)
+    anos_desejados = [2021, 2022, 2023, 2024, 2025]
     df = df[df['data'].dt.year.isin(anos_desejados)].copy()
 
-    # Converte MARCO_QM para número e depois para inteiro (remove casas decimais)
+    #Converte MARCO_QM para número e depois para inteiro (remove casas decimais)
     df['km'] = pd.to_numeric(
         df['MARCO_QM'].astype(str).str.replace(',', '.', regex=False),
         errors='coerce'
     ).fillna(0).astype(int)
 
-    # Conversões seguras
+    #Conversões seguras
     df['fatalidades'] = pd.to_numeric(df['QTD_VIT_FATAL'], errors='coerce').fillna(0).astype(int)
     df['latitude'] = pd.to_numeric(df['LATITUDE'], errors='coerce')
     df['longitude'] = pd.to_numeric(df['LONGITUDE'], errors='coerce')
 
-    # Regex para detectar valores inválidos
+    #Regex para detectar valores inválidos
     regex_invalido = re.compile(
         r'SEM\s+INFO(?:RMAÇÃO)?|NULO|NÃO\s+INFORMADO|^0$|NULL|SEM\s+INFO/NULO/0',
         flags=re.IGNORECASE
     )
 
-    # Aplica limpeza nas colunas de texto
+    #Aplica limpeza nas colunas de texto
     for csv_col in cols_mapping.keys():
         if csv_col in df.columns:
             df[csv_col] = df[csv_col].astype(str).str.strip()
             df = df[~df[csv_col].str.contains(regex_invalido, na=True)].copy()
 
-    # Remove registros com dados essenciais ausentes
+    #Remove registros com dados essenciais ausentes
     campos_essenciais = list(cols_mapping.keys()) + ['data', 'km', 'fatalidades', 'latitude', 'longitude']
     df = df.dropna(subset=campos_essenciais)
 
