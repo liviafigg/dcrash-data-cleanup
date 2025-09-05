@@ -49,6 +49,12 @@ def limpar_preparar(df):
     #Combina data + hora
     df['data'] = pd.to_datetime(df['DATA'] + ' ' + df['HR_ACID'], errors='coerce')
 
+    #Se a data não existir, usa o ano do nome do arquivo como fallback
+    if "ano_origem" in df.columns:
+        df.loc[df['data'].isna(), 'data'] = pd.to_datetime(
+            df['ano_origem'].astype(str) + "-01-01", errors="coerce"
+        )
+
     #Limpeza da coluna km
     df['km'] = pd.to_numeric(
         df['MARCO_QM'].astype(str).str.replace(',', '.', regex=False),
@@ -98,7 +104,7 @@ def inserir_batch(df, table, cfg):
     for _, row in df.iterrows():
         try:
             rec = [
-                str(uuid.uuid4())  #Gera um ID único
+                str(uuid.uuid4())  #gera um ID único
             ] + [row[k] for k in cols_mapping.keys()] + [
                 row['data'], row['fatalidades']
             ]
@@ -137,7 +143,7 @@ def main():
     for arquivo in arquivos:
         df = carregar_csv(arquivo)
         if df is not None and not df.empty:
-            #Tenta extrair ano do nome do arquivo
+            #Tenta extrair ano do nome do arquivo (para fallback)
             ano = re.findall(r'(\d{4})', arquivo)
             if ano:
                 df["ano_origem"] = int(ano[0])
@@ -160,6 +166,14 @@ def main():
         return
 
     print(f"[INFO] Linhas após limpeza: {len(df_clean)}")
+
+    #Resumo por ano
+    if not df_clean.empty:
+        df_clean['ano_final'] = df_clean['data'].dt.year
+        resumo = df_clean.groupby('ano_final').size()
+        print("\n[INFO] Registros por ano após limpeza:")
+        for ano, qtd in resumo.items():
+            print(f"   {ano}: {qtd} registros")
 
     #Insere no banco
     inserir_batch(df_clean, table_name, banco_config)
