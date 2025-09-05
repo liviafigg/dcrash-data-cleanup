@@ -52,11 +52,11 @@ def limpar_preparar(df):
     anos_desejados = [2021, 2022, 2023, 2024, 2025]
     df = df[df['data'].dt.year.isin(anos_desejados)].copy()
 
-    #Converte MARCO_QM para número e depois para inteiro (remove casas decimais)
+    #Limpeza de dados da coluna MARCO_QM, mantendo casas decimais
     df['km'] = pd.to_numeric(
         df['MARCO_QM'].astype(str).str.replace(',', '.', regex=False),
         errors='coerce'
-    ).fillna(0).astype(int)
+    ).fillna(0)
 
     #Conversões seguras
     df['fatalidades'] = pd.to_numeric(df['QTD_VIT_FATAL'], errors='coerce').fillna(0).astype(int)
