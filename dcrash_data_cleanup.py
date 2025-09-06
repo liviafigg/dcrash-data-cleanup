@@ -24,7 +24,7 @@ cols_mapping = {
     'SENTIDO': 'sentido',
     'CLASS_ACID': 'classificação_acidente',
     'TIPO_ACID': 'Tipo_acidente',
-    'CAUSA': 'causa',
+    'CAUSA': 'causa',  #Pode não existir em todos os anos
     'METEORO': 'meteoro',
     'VISIB': 'visibilidade',
     'VEIC': 'veiculo',
@@ -32,6 +32,23 @@ cols_mapping = {
     'LATITUDE': 'latitude',
     'LONGITUDE': 'longitude'
 }
+
+#Variações possíveis de nomes de colunas entre diferentes arquivos
+col_variations = {
+    "latitude": ["LATITUDE", "LAT", "LATIT", "LATITUD"],
+    "longitude": ["LONGITUDE", "LONG", "LON", "LONGIT"],
+    "veiculo": ["VEIC", "VEÍC", "VEÍCULOS", "QTD_VEIC"],
+    "datahora": ["DTHR_OC", "DATA_HORA", "DATA_OCORRENCIA"],
+    "concessionaria": ["NOME_CONC", "CONCESSIONÁRIA", "CONC"],
+}
+
+
+def detectar_coluna(df, nomes_possiveis):
+    for nome in nomes_possiveis:
+        if nome in df.columns:
+            return nome
+    return None
+
 
 def carregar_csv(local_path):
     if not os.path.exists(local_path):
@@ -47,23 +64,24 @@ def carregar_csv(local_path):
         #Carrega CSV com separador adequado
         df = pd.read_csv(local_path, sep=sep, low_memory=False, on_bad_lines="skip")
 
-        #Detecta se existe coluna unificada ou separada
+        #Detecta se existe coluna unificada de data/hora ou separada em DATA + HR_ACID
         if "DATA" in df.columns and "HR_ACID" in df.columns:
-            #Caso 2025 (duas colunas separadas)
+            #Caso igual ao CSV de 2025 (duas colunas separadas)
             df["data"] = pd.to_datetime(
                 df["DATA"].astype(str).str.strip() + " " + df["HR_ACID"].astype(str).str.strip(),
                 errors="coerce",
-                dayfirst=True
+                dayfirst=True  #Garante leitura correta de datas em formato brasileiro (dd/mm/yyyy)
             )
-        elif "DTHR_OC" in df.columns:
-            #Caso 2021–2024 (coluna unificada)
-            df["data"] = pd.to_datetime(df["DTHR_OC"], errors="coerce", dayfirst=True)
         elif any(col.upper().startswith("DATA") for col in df.columns):
-            #Fallback genérico (qualquer coluna com nome contendo "DATA")
+            #Caso igual aos CSVs de 2021–2024 (coluna única com data+hora)
             col_data = [c for c in df.columns if "DATA" in c.upper()][0]
             df["data"] = pd.to_datetime(df[col_data], errors="coerce", dayfirst=True)
         else:
-            print(f"[AVISO] Não foram encontradas colunas de data em {local_path}")
+            col_data = detectar_coluna(df, col_variations["datahora"])
+            if col_data:
+                df["data"] = pd.to_datetime(df[col_data], errors="coerce", dayfirst=True)
+            else:
+                print(f"[AVISO] Não foram encontradas colunas de data em {local_path}")
 
         return df
 
@@ -87,14 +105,17 @@ def limpar_preparar(df):
     else:
         df['km'] = 0  #Fallback caso não exista MARCO_QM
 
-    # Conversões seguras de colunas numéricas
+    #Conversões seguras de colunas numéricas
     if "QTD_VIT_FATAL" in df.columns:
         df['fatalidades'] = pd.to_numeric(df['QTD_VIT_FATAL'], errors='coerce').fillna(0).astype(int)
     else:
         df['fatalidades'] = 0
 
-    df['latitude'] = pd.to_numeric(df['LATITUDE'], errors='coerce') if "LATITUDE" in df.columns else None
-    df['longitude'] = pd.to_numeric(df['LONGITUDE'], errors='coerce') if "LONGITUDE" in df.columns else None
+    #Latitude e longitude (busca nomes diferentes)
+    col_lat = detectar_coluna(df, col_variations["latitude"])
+    col_lon = detectar_coluna(df, col_variations["longitude"])
+    df['latitude'] = pd.to_numeric(df[col_lat], errors='coerce') if col_lat else None
+    df['longitude'] = pd.to_numeric(df[col_lon], errors='coerce') if col_lon else None
 
     #Regex para valores inválidos (ex: SEM INFORMAÇÃO, NULO, etc.)
     regex_invalido = re.compile(
@@ -102,14 +123,14 @@ def limpar_preparar(df):
         flags=re.IGNORECASE
     )
 
-    #Aplica limpeza em todas as colunas de texto do mapeamento
+    #Aplica limpeza em todas as colunas de texto do mapeamento que existirem
     for csv_col in cols_mapping.keys():
         if csv_col in df.columns:
             df[csv_col] = df[csv_col].astype(str).str.strip()
             df = df[~df[csv_col].str.contains(regex_invalido, na=True)].copy()
 
-    #Remove registros com dados essenciais ausentes
-    campos_essenciais = ['data', 'km', 'fatalidades', 'latitude', 'longitude']
+    #Remove registros apenas se faltar data
+    campos_essenciais = ['data']
     df = df.dropna(subset=campos_essenciais)
 
     print(f"[INFO] Registros após limpeza: {len(df)}")
@@ -138,9 +159,10 @@ def inserir_batch(df, table, cfg):
         try:
             rec = [
                 str(uuid.uuid4())  #Gera ID único
-            ] + [row[k] if k in row else None for k in cols_mapping.keys()] + [
-                row['data'], row['fatalidades']
             ]
+            for k in cols_mapping.keys():
+                rec.append(row[k] if k in row else None)  #Colunas ausentes vão como None
+            rec.extend([row['data'], row['fatalidades']])
             records.append(rec)
         except Exception as e:
             print(f"[AVISO] Linha ignorada por erro: {e}")
