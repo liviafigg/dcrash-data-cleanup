@@ -39,50 +39,80 @@ def carregar_csv(local_path):
         return None
 
     try:
-        return pd.read_csv(local_path, sep=",", low_memory=False, on_bad_lines="skip")
+        #Detecta separador verificando a primeira linha
+        with open(local_path, 'r', encoding='utf-8') as f:
+            primeira_linha = f.readline()
+            sep = ";" if ";" in primeira_linha else ","
+
+        #Carrega CSV com separador adequado
+        df = pd.read_csv(local_path, sep=sep, low_memory=False, on_bad_lines="skip")
+
+        #Detecta se existe coluna unificada de data/hora ou separada em DATA + HR_ACID
+        if "DATA" in df.columns and "HR_ACID" in df.columns:
+            #Caso igual ao CSV de 2025 (duas colunas separadas)
+            df["data"] = pd.to_datetime(
+                df["DATA"].astype(str).str.strip() + " " + df["HR_ACID"].astype(str).str.strip(),
+                errors="coerce",
+                dayfirst=True  #Garante leitura correta de datas em formato brasileiro (dd/mm/yyyy)
+            )
+        elif any(col.upper().startswith("DATA") for col in df.columns):
+            #Caso igual aos CSVs de 2021–2024 (coluna única com data+hora)
+            col_data = [c for c in df.columns if "DATA" in c.upper()][0]
+            df["data"] = pd.to_datetime(df[col_data], errors="coerce", dayfirst=True)
+        else:
+            print(f"[AVISO] Não foram encontradas colunas de data em {local_path}")
+
+        return df
+
     except Exception as e:
         print(f"[ERRO] Falha ao ler CSV {local_path}: {e}")
         return None
 
 
 def limpar_preparar(df):
-    #Combina data + hora
-    df['data'] = pd.to_datetime(df['DATA'] + ' ' + df['HR_ACID'], errors='coerce')
 
-    #Se a data não existir, usa o ano do nome do arquivo como fallback
-    if "ano_origem" in df.columns:
-        df.loc[df['data'].isna(), 'data'] = pd.to_datetime(
-            df['ano_origem'].astype(str) + "-01-01", errors="coerce"
-        )
+    #Debug: mostra quantos registros válidos por ano existem antes da limpeza
+    print("[DEBUG] Quantidade de datas válidas por ano (antes da limpeza):")
+    print(df['data'].dt.year.value_counts(dropna=True).sort_index())
 
-    #Limpeza da coluna km
-    df['km'] = pd.to_numeric(
-        df['MARCO_QM'].astype(str).str.replace(',', '.', regex=False),
-        errors='coerce'
-    ).fillna(0)
+    #Limpeza da coluna km (mantendo casas decimais)
+    if "MARCO_QM" in df.columns:
+        df['km'] = pd.to_numeric(
+            df['MARCO_QM'].astype(str).str.replace(',', '.', regex=False),
+            errors='coerce'
+        ).fillna(0)
+    else:
+        df['km'] = 0  #fallback caso não exista MARCO_QM
 
-    #Conversões seguras
-    df['fatalidades'] = pd.to_numeric(df['QTD_VIT_FATAL'], errors='coerce').fillna(0).astype(int)
-    df['latitude'] = pd.to_numeric(df['LATITUDE'], errors='coerce')
-    df['longitude'] = pd.to_numeric(df['LONGITUDE'], errors='coerce')
+    #Conversões seguras de colunas numéricas
+    if "QTD_VIT_FATAL" in df.columns:
+        df['fatalidades'] = pd.to_numeric(df['QTD_VIT_FATAL'], errors='coerce').fillna(0).astype(int)
+    else:
+        df['fatalidades'] = 0
 
-    #Regex para valores inválidos
+    df['latitude'] = pd.to_numeric(df['LATITUDE'], errors='coerce') if "LATITUDE" in df.columns else None
+    df['longitude'] = pd.to_numeric(df['LONGITUDE'], errors='coerce') if "LONGITUDE" in df.columns else None
+
+    #Regex para valores inválidos (ex: SEM INFORMAÇÃO, NULO, etc.)
     regex_invalido = re.compile(
         r'SEM\s+INFO(?:RMAÇÃO)?|NULO|NÃO\s+INFORMADO|^0$|NULL|SEM\s+INFO/NULO/0',
         flags=re.IGNORECASE
     )
 
-    #Aplica limpeza nas colunas de texto
+    #Aplica limpeza em todas as colunas de texto do mapeamento
     for csv_col in cols_mapping.keys():
         if csv_col in df.columns:
             df[csv_col] = df[csv_col].astype(str).str.strip()
             df = df[~df[csv_col].str.contains(regex_invalido, na=True)].copy()
 
     #Remove registros com dados essenciais ausentes
-    campos_essenciais = list(cols_mapping.keys()) + ['data', 'km', 'fatalidades', 'latitude', 'longitude']
+    campos_essenciais = ['data', 'km', 'fatalidades', 'latitude', 'longitude']
     df = df.dropna(subset=campos_essenciais)
 
     print(f"[INFO] Registros após limpeza: {len(df)}")
+    print("[INFO] Registros por ano após limpeza:")
+    print(df['data'].dt.year.value_counts().sort_index())
+
     return df
 
 
@@ -104,8 +134,8 @@ def inserir_batch(df, table, cfg):
     for _, row in df.iterrows():
         try:
             rec = [
-                str(uuid.uuid4())  #gera um ID único
-            ] + [row[k] for k in cols_mapping.keys()] + [
+                str(uuid.uuid4())  #Gera ID único
+            ] + [row[k] if k in row else None for k in cols_mapping.keys()] + [
                 row['data'], row['fatalidades']
             ]
             records.append(rec)
@@ -143,10 +173,7 @@ def main():
     for arquivo in arquivos:
         df = carregar_csv(arquivo)
         if df is not None and not df.empty:
-            #Tenta extrair ano do nome do arquivo (para fallback)
-            ano = re.findall(r'(\d{4})', arquivo)
-            if ano:
-                df["ano_origem"] = int(ano[0])
+            print(f"[INFO] Arquivo {arquivo} carregado com {len(df)} linhas.")
             dfs.append(df)
         else:
             print(f"[AVISO] Arquivo {arquivo} não carregado ou vazio.")
@@ -155,7 +182,7 @@ def main():
         print("[ERRO] Nenhum CSV válido encontrado.")
         return
 
-    #Junta tudo
+    #Junta todos os DataFrames carregados
     df = pd.concat(dfs, ignore_index=True)
     print(f"[INFO] Total de linhas carregadas (todos arquivos): {len(df)}")
 
@@ -167,15 +194,7 @@ def main():
 
     print(f"[INFO] Linhas após limpeza: {len(df_clean)}")
 
-    #Resumo por ano
-    if not df_clean.empty:
-        df_clean['ano_final'] = df_clean['data'].dt.year
-        resumo = df_clean.groupby('ano_final').size()
-        print("\n[INFO] Registros por ano após limpeza:")
-        for ano, qtd in resumo.items():
-            print(f"   {ano}: {qtd} registros")
-
-    #Insere no banco
+    #Inserção no banco
     inserir_batch(df_clean, table_name, banco_config)
 
 
