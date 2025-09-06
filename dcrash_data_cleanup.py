@@ -47,16 +47,19 @@ def carregar_csv(local_path):
         #Carrega CSV com separador adequado
         df = pd.read_csv(local_path, sep=sep, low_memory=False, on_bad_lines="skip")
 
-        #Detecta se existe coluna unificada de data/hora ou separada em DATA + HR_ACID
+        #Detecta se existe coluna unificada ou separada
         if "DATA" in df.columns and "HR_ACID" in df.columns:
-            #Caso igual ao CSV de 2025 (duas colunas separadas)
+            #Caso 2025 (duas colunas separadas)
             df["data"] = pd.to_datetime(
                 df["DATA"].astype(str).str.strip() + " " + df["HR_ACID"].astype(str).str.strip(),
                 errors="coerce",
-                dayfirst=True  #Garante leitura correta de datas em formato brasileiro (dd/mm/yyyy)
+                dayfirst=True
             )
+        elif "DTHR_OC" in df.columns:
+            #Caso 2021–2024 (coluna unificada)
+            df["data"] = pd.to_datetime(df["DTHR_OC"], errors="coerce", dayfirst=True)
         elif any(col.upper().startswith("DATA") for col in df.columns):
-            #Caso igual aos CSVs de 2021–2024 (coluna única com data+hora)
+            #Fallback genérico (qualquer coluna com nome contendo "DATA")
             col_data = [c for c in df.columns if "DATA" in c.upper()][0]
             df["data"] = pd.to_datetime(df[col_data], errors="coerce", dayfirst=True)
         else:
@@ -82,9 +85,9 @@ def limpar_preparar(df):
             errors='coerce'
         ).fillna(0)
     else:
-        df['km'] = 0  #fallback caso não exista MARCO_QM
+        df['km'] = 0  #Fallback caso não exista MARCO_QM
 
-    #Conversões seguras de colunas numéricas
+    # Conversões seguras de colunas numéricas
     if "QTD_VIT_FATAL" in df.columns:
         df['fatalidades'] = pd.to_numeric(df['QTD_VIT_FATAL'], errors='coerce').fillna(0).astype(int)
     else:
